@@ -98,6 +98,7 @@ export default Image.extend({
               attrs: options,
             })
           }
+          commands.focus(null)
           return commands.insertContentAt(editor.state.selection.anchor, {
             type: this.name,
             attrs: options,
