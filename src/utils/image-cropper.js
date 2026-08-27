@@ -25,6 +25,9 @@ export class ImageCropper {
     this.cropper = null
     this.image = null
     this.container = null
+    this.selection = null
+    this.selectionChangeHandler = null
+    this.constrainingSelection = false
   }
 
   start({ image, container, template } = {}) {
@@ -42,10 +45,16 @@ export class ImageCropper {
   }
 
   destroy() {
+    if (this.selection && this.selectionChangeHandler) {
+      this.selection.removeEventListener('change', this.selectionChangeHandler)
+    }
     this.cropper?.destroy?.()
     this.cropper = null
     this.image = null
     this.container = null
+    this.selection = null
+    this.selectionChangeHandler = null
+    this.constrainingSelection = false
   }
 
   getSelection() {
@@ -62,6 +71,94 @@ export class ImageCropper {
       width: Number(selection.width || 0),
       height: Number(selection.height || 0),
     }
+  }
+
+  getSelectionBounds(selection = this.getSelection()) {
+    const canvas = selection?.parentElement
+    return {
+      width: Number(canvas?.clientWidth || canvas?.offsetWidth || 0),
+      height: Number(canvas?.clientHeight || canvas?.offsetHeight || 0),
+    }
+  }
+
+  constrainSelectionSnapshot(snapshot, selection = this.getSelection()) {
+    if (!snapshot) {
+      return null
+    }
+    const bounds = this.getSelectionBounds(selection)
+    const width = Math.min(
+      Math.max(0, Number(snapshot.width) || 0),
+      bounds.width,
+    )
+    const height = Math.min(
+      Math.max(0, Number(snapshot.height) || 0),
+      bounds.height,
+    )
+    return {
+      x: Math.min(Math.max(0, Number(snapshot.x) || 0), bounds.width - width),
+      y: Math.min(Math.max(0, Number(snapshot.y) || 0), bounds.height - height),
+      width,
+      height,
+    }
+  }
+
+  bindSelectionBounds(selection = this.getSelection()) {
+    if (!selection) {
+      return
+    }
+    this.selection = selection
+    this.selectionChangeHandler = (event) => {
+      if (this.constrainingSelection) {
+        return
+      }
+      const next = this.constrainSelectionSnapshot(event.detail, selection)
+      if (
+        !next ||
+        (next.x === event.detail.x &&
+          next.y === event.detail.y &&
+          next.width === event.detail.width &&
+          next.height === event.detail.height)
+      ) {
+        return
+      }
+      event.preventDefault()
+      this.constrainingSelection = true
+      selection.$change(
+        next.x,
+        next.y,
+        next.width,
+        next.height,
+        selection.aspectRatio,
+        true,
+      )
+      this.constrainingSelection = false
+    }
+    selection.addEventListener('change', this.selectionChangeHandler)
+  }
+
+  async ready(initialSelection = null) {
+    const image = this.cropper?.getCropperImage?.()
+    await image?.$ready?.()
+    const selection = this.getSelection()
+    if (!selection) {
+      return null
+    }
+    this.bindSelectionBounds(selection)
+    const next = this.constrainSelectionSnapshot(
+      initialSelection || this.getSelectionSnapshot(selection),
+      selection,
+    )
+    if (next) {
+      selection.$change(
+        next.x,
+        next.y,
+        next.width,
+        next.height,
+        selection.aspectRatio,
+        true,
+      )
+    }
+    return selection
   }
 
   isSelectionChanged(

@@ -183,6 +183,10 @@ const createImageAttributes = () => ({
     default: null,
     renderHTML: () => ({}),
   },
+  cropData: {
+    default: null,
+    renderHTML: () => ({}),
+  },
 })
 
 const createInitialImageContent = (attrs, inline) => {

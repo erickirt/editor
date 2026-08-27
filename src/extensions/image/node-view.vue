@@ -41,8 +41,8 @@
             isCropping || isReadonlyNode || !editor?.isEditable || isLockedNode
           "
           :angle="attrs.angle"
-          :width="Number(attrs.width)"
-          :height="Number(attrs.height)"
+          :width="cropDisplayWidth"
+          :height="cropDisplayHeight"
           :left="0"
           :top="0"
           :min-width="14"
@@ -53,6 +53,8 @@
           :equal-proportion="attrs.equalProportion"
           @rotate="onRotate"
           @resize="onResize"
+          @resize-start="onResizeStart"
+          @resize-end="onResizeEnd"
           @focus="selected = true"
         >
           <div v-if="isImageLoading" class="umo-node-image-loading">
@@ -70,32 +72,28 @@
               <img
                 ref="cropperImageRef"
                 class="umo-node-image-cropper-source"
-                :src="attrs.src"
+                :src="cropSource"
                 :alt="attrs.alt || attrs.title || attrs.name || 'image'"
                 draggable="false"
                 crossorigin="anonymous"
               />
             </div>
           </template>
-          <img
-            v-else
-            ref="imageRef"
-            :src="attrs.src"
-            draggable="false"
-            :class="{ 'not-equal-proportion': !attrs.equalProportion }"
-            :style="{
-              transform:
-                attrs.flipX || attrs.flipY
-                  ? `rotateX(${attrs.flipX ? '180' : '0'}deg) rotateY(${attrs.flipY ? '180' : '0'}deg)`
-                  : 'none',
-            }"
-            :data-id="attrs.id"
-            :data-preview="attrs.previewType"
-            crossorigin="anonymous"
-            loading="lazy"
-            @load="onLoad"
-            @error="onError"
-          />
+          <div v-else class="umo-node-image-viewport">
+            <img
+              ref="imageRef"
+              :src="attrs.src"
+              draggable="false"
+              :class="{ 'not-equal-proportion': !attrs.equalProportion }"
+              :style="renderedImageStyle"
+              :data-id="attrs.id"
+              :data-preview="attrs.previewType"
+              crossorigin="anonymous"
+              loading="lazy"
+              @load="onLoad"
+              @error="onError"
+            />
+          </div>
           <div
             v-if="!attrs.uploaded && attrs.file !== null"
             class="umo-node-image-uploading"
@@ -173,6 +171,8 @@ let cropInitialSelection = null
 let stopClickOutside = null
 let isCropTransactionListening = false
 let isCropPointerActive = false
+let isApplyingCrop = false
+let isImageResizing = $ref(false)
 let imageLayoutFrameId = 0
 let imageLayoutCommitFrameId = 0
 let dragPreviewFrameId = 0
@@ -257,6 +257,8 @@ const imageClass = $computed(() => ({
 const dragerClass = $computed(() => ({
   'is-draggable': attrs.draggable,
   'is-cropping': isCropping,
+  'is-cropped': !!cropData && !isCropping,
+  'is-resizing': isImageResizing,
   'umo-hover-shadow': !isReadonlyNode,
   'umo-select-outline': !attrs.draggable && attrs.src && !error,
   'is-alt-selected': selected && !attrs.draggable && attrs.src && !error,
@@ -271,10 +273,46 @@ const dragerStyle = $computed(() => ({
 const imageFrameStyle = $computed(() => ({
   cursor: canMoveImageNode ? 'move' : 'default',
 }))
+const cropData = $computed(() => attrs.cropData || null)
+const cropSource = $computed(() => attrs.src)
+const cropCanvasWidth = $computed(() =>
+  Math.max(Number(cropData?.sourceWidth || attrs.width) || 0, 14),
+)
+const cropCanvasHeight = $computed(() =>
+  Math.max(Number(cropData?.sourceHeight || attrs.height) || 0, 14),
+)
+const cropDisplayWidth = $computed(() =>
+  isCropping ? cropCanvasWidth : Number(attrs.width),
+)
+const cropDisplayHeight = $computed(() =>
+  isCropping ? cropCanvasHeight : Number(attrs.height),
+)
 const cropperStyle = $computed(() => ({
-  width: `${Math.max(Number(attrs.width) || 0, 14)}px`,
-  height: `${Math.max(Number(attrs.height) || 0, 14)}px`,
+  width: `${cropCanvasWidth}px`,
+  height: `${cropCanvasHeight}px`,
 }))
+const renderedImageStyle = $computed(() => {
+  const scaleX = cropData
+    ? (Number(attrs.width) || Number(cropData.width)) / Number(cropData.width)
+    : 1
+  const scaleY = cropData
+    ? (Number(attrs.height) || Number(cropData.height)) /
+      Number(cropData.height)
+    : 1
+  return {
+    width: cropData ? `${cropCanvasWidth * scaleX}px` : undefined,
+    height: cropData ? `${cropCanvasHeight * scaleY}px` : undefined,
+    maxWidth: cropData ? 'none' : undefined,
+    maxHeight: cropData ? 'none' : undefined,
+    marginLeft: cropData ? `${-cropData.x * scaleX}px` : undefined,
+    marginTop: cropData ? `${-cropData.y * scaleY}px` : undefined,
+    transform:
+      attrs.flipX || attrs.flipY
+        ? `rotateX(${attrs.flipX ? '180' : '0'}deg) rotateY(${attrs.flipY ? '180' : '0'}deg)`
+        : 'none',
+    transformOrigin: cropData ? 'top left' : undefined,
+  }
+})
 const altContainerClass = $computed(() => ({
   'is-readonly': !canEditAlt,
 }))
@@ -372,7 +410,7 @@ const ensureOutsideHandler = () => {
       if (isCropPointerActive) {
         return
       }
-      exitCropping()
+      await applyCrop()
     }
     selected = false
   })
@@ -390,14 +428,6 @@ const setCropTransactionListening = (enabled) => {
 }
 
 const getCropperSelection = () => cropper.getSelection()
-
-const getCropExportSize = (selection) => {
-  return cropper.getExportSize(selection, {
-    fallbackWidth: Number(attrs.width) || 0,
-    fallbackHeight: Number(attrs.height) || 0,
-    fallbackImage: imageRef,
-  })
-}
 
 const getCropSelectionSnapshot = (selection) =>
   cropper.getSelectionSnapshot(selection)
@@ -421,6 +451,7 @@ const destroyCropper = () => {
 
 const exitCropping = () => {
   isCropPointerActive = false
+  unbindCropperKeydown()
   destroyCropper()
   isCropping = false
   syncCropperState(null)
@@ -441,13 +472,22 @@ const startCropping = async () => {
     image: cropperImageRef,
     container: cropperHostRef.value,
   })
-  await nextTick()
-  cropInitialSelection = getCropSelectionSnapshot(getCropperSelection())
+  const initialSelection = cropData
+    ? {
+        x: cropData.x,
+        y: cropData.y,
+        width: cropData.width,
+        height: cropData.height,
+      }
+    : null
+  const selection = await cropper.ready(initialSelection)
+  cropInitialSelection = getCropSelectionSnapshot(selection)
+  bindCropperKeydown()
   syncCropperState(getNodePos())
 }
 
 const applyCrop = async () => {
-  if (!isCropping) {
+  if (!isCropping || isApplyingCrop) {
     return
   }
   const selection = getCropperSelection()
@@ -455,16 +495,17 @@ const applyCrop = async () => {
     exitCropping()
     return
   }
+  isApplyingCrop = true
   try {
-    const { width, height } = getCropExportSize(selection)
-    const canvas = await cropper.exportSelection(selection, { width, height })
-    const dataUrl = canvas.toDataURL('image/png')
+    const snapshot = getCropSelectionSnapshot(selection)
     updateAttributes({
-      id: shortId(10),
-      src: dataUrl,
-      width: Number(selection.width.toFixed(2)),
-      height: Number(selection.height.toFixed(2)),
-      uploaded: false,
+      cropData: {
+        ...snapshot,
+        sourceWidth: cropCanvasWidth,
+        sourceHeight: cropCanvasHeight,
+      },
+      width: Number(snapshot.width.toFixed(2)),
+      height: Number(snapshot.height.toFixed(2)),
     })
   } catch (cropError) {
     useMessage('error', {
@@ -472,6 +513,7 @@ const applyCrop = async () => {
       content: cropError?.message || t('bubbleMenu.image.cropFailed'),
     })
   } finally {
+    isApplyingCrop = false
     exitCropping()
   }
 }
@@ -492,8 +534,25 @@ const handleCropperMousedown = () => {
   document.addEventListener('mouseup', stopCropPointerTracking, true)
 }
 
+const handleCropperKeydown = async (event) => {
+  if (!isCropping || event.key !== 'Enter' || event.isComposing) {
+    return
+  }
+  event.preventDefault()
+  event.stopPropagation()
+  await applyCrop()
+}
+
 const handleCropperDblclick = async () => {
   await applyCrop()
+}
+
+const bindCropperKeydown = () => {
+  document.addEventListener('keydown', handleCropperKeydown, true)
+}
+
+const unbindCropperKeydown = () => {
+  document.removeEventListener('keydown', handleCropperKeydown, true)
 }
 
 const isCurrentImageNodeSelected = () => {
@@ -511,7 +570,7 @@ const handleImageCropTransaction = async ({ transaction }) => {
   if (cropAction?.pos === getNodePos()) {
     if (cropAction.action === 'toggle') {
       if (isCropping) {
-        exitCropping()
+        await applyCrop()
       } else {
         await startCropping()
       }
@@ -522,7 +581,7 @@ const handleImageCropTransaction = async ({ transaction }) => {
     if (isCropPointerActive) {
       return
     }
-    exitCropping()
+    await applyCrop()
   }
 }
 
@@ -543,6 +602,13 @@ const getContainerMaxWidth = () => {
 }
 
 const getImageRatio = () => {
+  if (cropData) {
+    const cropWidth = Number(cropData.width)
+    const cropHeight = Number(cropData.height)
+    if (cropWidth > 0 && cropHeight > 0) {
+      return cropWidth / cropHeight
+    }
+  }
   const attrWidth = Number(attrs.width)
   const attrHeight = Number(attrs.height)
   if (attrWidth > 0 && attrHeight > 0) {
@@ -569,6 +635,9 @@ const syncContainerBounds = () => {
 }
 
 const syncRenderedImageHeight = () => {
+  if (cropData) {
+    return
+  }
   const renderedHeight = Number(
     (
       imageRef?.clientHeight ||
@@ -587,6 +656,10 @@ const syncRenderedImageHeight = () => {
 }
 
 const clampImageToContainer = () => {
+  if (cropData) {
+    syncContainerBounds()
+    return false
+  }
   const { nextMaxWidth, ratio } = syncContainerBounds()
   if (nextMaxWidth <= 14) {
     scheduleImageLayoutSync()
@@ -928,6 +1001,16 @@ const onResize = ({ width, height }) => {
   })
 }
 
+const onResizeStart = () => {
+  isImageResizing = true
+  selected = true
+  setImageNodeSelection()
+}
+
+const onResizeEnd = () => {
+  isImageResizing = false
+}
+
 const onNativeDragstart = (event) => {
   if (isCropping) {
     return
@@ -1225,12 +1308,22 @@ onMounted(async () => {
       &.is-cropping {
         outline: solid 1px var(--umo-primary-color);
       }
+      &.is-resizing {
+        .es-drager-dot {
+          display: block !important;
+        }
+      }
       &.is-alt-selected {
         outline: solid 1px var(--umo-primary-color);
       }
       position: relative;
       max-width: 100%;
       max-height: 100%;
+    }
+    .umo-node-image-viewport {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
     }
     img {
       display: block;
