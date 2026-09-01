@@ -1,6 +1,9 @@
 <template>
   <bubble-menu v-if="editor" class="umo-editor-bubble-menu" :editor="editor">
-    <menus-bubble-menus v-if="options?.document?.enableBubbleMenu">
+    <menus-bubble-menus
+      v-if="options?.document?.enableBubbleMenu"
+      :key="bubbleMenuKey"
+    >
       <template #bubble_menu="props">
         <slot name="bubble_menu" v-bind="props" />
       </template>
@@ -10,9 +13,19 @@
 
 <script setup>
 import { BubbleMenu } from '@tiptap/vue-3/menus'
+import { shortId } from '@/utils/short-id'
 
 const editor = inject('editor')
 const options = inject('options')
+
+let bubbleMenuKey = $ref(shortId())
+watch(
+  () => [options.value.document?.readOnly, editor.value?.isEditable],
+  async () => {
+    await nextTick()
+    bubbleMenuKey = shortId()
+  },
+)
 </script>
 
 <style lang="less">
