@@ -606,7 +606,7 @@ const changeBulletListType = (listType) => {
 
 const toggleTaskItemChecked = (event) => {
   const { target } = event
-  if (!editor?.isEditable) {
+  if (!editor.value?.isEditable) {
     target.checked = isTaskChecked
     return
   }
@@ -618,7 +618,7 @@ const toggleTaskItemChecked = (event) => {
     return
   }
 
-  editor
+  editor.value
     ?.chain()
     .focus(undefined, { scrollIntoView: false })
     .command(({ tr }) => {
