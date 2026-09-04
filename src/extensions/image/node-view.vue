@@ -88,6 +88,7 @@
               :style="renderedImageStyle"
               :data-id="attrs.id"
               :data-preview="attrs.previewType"
+              :data-preview-src="previewImageSrc || attrs.src"
               crossorigin="anonymous"
               loading="lazy"
               @load="onLoad"
@@ -176,6 +177,7 @@ let isImageResizing = $ref(false)
 let imageLayoutFrameId = 0
 let imageLayoutCommitFrameId = 0
 let dragPreviewFrameId = 0
+let previewImageSrc = $ref(null)
 
 const isDataImageSrc = (src) => String(src || '').startsWith('data:image')
 const isNodeSelected = $computed(() => !!props.selected)
@@ -391,6 +393,64 @@ const setNodeErrorState = (nextError) => {
 const syncImageStateFromSrc = (src) => {
   setNodeErrorState(false)
   isLoading = !!src && !isDataImageSrc(src)
+}
+
+const updatePreviewImageSrc = () => {
+  if (!attrs.src || attrs.previewType === null) {
+    previewImageSrc = null
+    return
+  }
+  if (!cropData) {
+    previewImageSrc = attrs.src
+    return
+  }
+  const imageElement = imageRef
+  const naturalWidth = Number(imageElement?.naturalWidth || 0)
+  const naturalHeight = Number(imageElement?.naturalHeight || 0)
+  const sourceWidth = Number(cropData?.sourceWidth || attrs.width || 0)
+  const sourceHeight = Number(cropData?.sourceHeight || attrs.height || 0)
+  const cropWidth = Number(cropData?.width || 0)
+  const cropHeight = Number(cropData?.height || 0)
+  if (
+    !imageElement?.complete ||
+    naturalWidth <= 0 ||
+    naturalHeight <= 0 ||
+    sourceWidth <= 0 ||
+    sourceHeight <= 0 ||
+    cropWidth <= 0 ||
+    cropHeight <= 0
+  ) {
+    previewImageSrc = attrs.src
+    return
+  }
+
+  const scaleX = naturalWidth / sourceWidth
+  const scaleY = naturalHeight / sourceHeight
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.max(1, Math.round(cropWidth * scaleX))
+  canvas.height = Math.max(1, Math.round(cropHeight * scaleY))
+  const context = canvas.getContext('2d')
+  if (!context) {
+    previewImageSrc = attrs.src
+    return
+  }
+
+  try {
+    context.drawImage(
+      imageElement,
+      Number(cropData.x || 0) * scaleX,
+      Number(cropData.y || 0) * scaleY,
+      cropWidth * scaleX,
+      cropHeight * scaleY,
+      0,
+      0,
+      canvas.width,
+      canvas.height,
+    )
+    previewImageSrc = canvas.toDataURL('image/png')
+  } catch {
+    previewImageSrc = attrs.src
+  }
 }
 
 const stopOutsideHandler = () => {
@@ -927,6 +987,7 @@ const onLoad = async () => {
   }
   isLoading = false
   setNodeErrorState(false)
+  updatePreviewImageSrc()
   await nextTick()
   const didClamp = clampImageToContainer()
   if (!didClamp) {
@@ -937,6 +998,7 @@ const onLoad = async () => {
 const onError = () => {
   isLoading = false
   setNodeErrorState(true)
+  previewImageSrc = attrs.src
 }
 
 const syncLoadedImageLayout = async () => {
@@ -1219,6 +1281,15 @@ watch(
     await syncUploadStateFromSrc(src)
     await nextTick()
     await syncLoadedImageLayout()
+    updatePreviewImageSrc()
+  },
+  { immediate: true },
+)
+
+watch(
+  () => [attrs.src, attrs.cropData, attrs.previewType],
+  () => {
+    updatePreviewImageSrc()
   },
   { immediate: true },
 )
