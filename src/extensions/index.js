@@ -115,6 +115,40 @@ const nodeTypes = [
   'inlineMath',
 ]
 
+const getEditorContentMaxWidth = (editor) => {
+  const editorElement = editor?.view?.dom
+  if (!(editorElement instanceof HTMLElement)) {
+    return 0
+  }
+  const styles = window.getComputedStyle(editorElement)
+  const paddingLeft = Number.parseFloat(styles.paddingLeft || '0') || 0
+  const paddingRight = Number.parseFloat(styles.paddingRight || '0') || 0
+  return Math.max(0, editorElement.clientWidth - paddingLeft - paddingRight)
+}
+
+const fitImageDimensionsToWidth = (dimensions = {}, maxWidth = 0) => {
+  const width = Number(dimensions?.width || 0)
+  const height = Number(dimensions?.height || 0)
+  if (width <= 0 || height <= 0 || maxWidth <= 0 || width <= maxWidth) {
+    return dimensions
+  }
+  const nextWidth = Number(maxWidth.toFixed(2))
+  const nextHeight = Number(((height * nextWidth) / width).toFixed(2))
+  return {
+    ...dimensions,
+    width: nextWidth,
+    height: nextHeight,
+  }
+}
+
+const resolveInsertImageDimensions = async (editor, file) => {
+  const dimensions = await getImageDimensions(file)
+  return fitImageDimensionsToWidth(
+    dimensions,
+    getEditorContentMaxWidth(editor),
+  )
+}
+
 export const getDefaultExtensions = ({ container, options, uploadFileMap }) => {
   const {
     page,
@@ -285,7 +319,7 @@ export const getDefaultExtensions = ({ container, options, uploadFileMap }) => {
         )
         const scrollTop = pageContainer?.scrollTop || 0
         for (const file of files) {
-          const dimensions = await getImageDimensions(file)
+          const dimensions = await resolveInsertImageDimensions(editor, file)
           editor.commands.insertFile({
             file,
             uploadFileMap: uploadFileMap.value,
@@ -303,7 +337,7 @@ export const getDefaultExtensions = ({ container, options, uploadFileMap }) => {
       },
       async onDrop(editor, files, pos) {
         for (const file of files) {
-          const dimensions = await getImageDimensions(file)
+          const dimensions = await resolveInsertImageDimensions(editor, file)
           editor.commands.insertFile({
             file,
             uploadFileMap: uploadFileMap.value,
