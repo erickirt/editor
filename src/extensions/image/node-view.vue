@@ -1150,7 +1150,12 @@ const onDragPointerDown = (event) => {
 }
 
 const openImageViewer = async (event) => {
-  if (isCropping || isAltTarget(event?.target) || attrs.previewType === null) {
+  if (
+    isCropping ||
+    error ||
+    isAltTarget(event?.target) ||
+    attrs.previewType === null
+  ) {
     return
   }
   if (attrs.id === null) {
